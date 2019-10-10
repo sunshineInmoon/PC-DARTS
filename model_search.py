@@ -15,7 +15,7 @@ def channel_shuffle(x, groups):
     x = x.view(batchsize, groups, 
         channels_per_group, height, width)
 
-    x = torch.transpose(x, 1, 2).contiguous()
+    x = torch.transpose(x, 1, 2).contiguous() #不是随机shuffle，利用转置，shuffle channels
 
     # flatten
     x = x.view(batchsize, -1, height, width)
@@ -30,7 +30,7 @@ class MixedOp(nn.Module):
     self.mp = nn.MaxPool2d(2,2)
 
     for primitive in PRIMITIVES:
-      op = OPS[primitive](C //4, stride, False)
+      op = OPS[primitive](C //4, stride, False) #论文中K=4，即只取1/K个channels
       if 'pool' in primitive:
         op = nn.Sequential(op, nn.BatchNorm2d(C //4, affine=False))
       self._ops.append(op)
@@ -38,14 +38,14 @@ class MixedOp(nn.Module):
 
   def forward(self, x, weights):
     #channel proportion k=4  
-    dim_2 = x.shape[1]
-    xtemp = x[ : , :  dim_2//4, :, :]
-    xtemp2 = x[ : ,  dim_2//4:, :, :]
+    dim_2 = x.shape[1] # Channels
+    xtemp = x[ : , :  dim_2//4, :, :] #取前1/4 Channels 做为输入送到op中计算
+    xtemp2 = x[ : ,  dim_2//4:, :, :] #取后3/4 Channels 保留，直接向后传播
     temp1 = sum(w * op(xtemp) for w, op in zip(weights, self._ops))
     #reduction cell needs pooling before concat
-    if temp1.shape[2] == x.shape[2]:
+    if temp1.shape[2] == x.shape[2]: # normal cell
       ans = torch.cat([temp1,xtemp2],dim=1)
-    else:
+    else: # reduce cell
       ans = torch.cat([temp1,self.mp(xtemp2)], dim=1)
     ans = channel_shuffle(ans,4)
     #ans = torch.cat([ans[ : ,  dim_2//4:, :, :],ans[ : , :  dim_2//4, :, :]],dim=1)
